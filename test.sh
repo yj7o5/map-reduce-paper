@@ -24,6 +24,7 @@ rm -f mr-*
 (cd ../impl && go build $RACE -buildmode=plugin early_exit.go) || exit 1
 (cd ../impl && go build $RACE -buildmode=plugin crash.go) || exit 1
 (cd ../impl && go build $RACE -buildmode=plugin nocrash.go) || exit 1
+(cd ../impl && go build $RACE -buildmode=plugin grep.go) || exit 1
 (cd .. && go build $RACE mrcoordinator.go) || exit 1
 (cd .. && go build $RACE mrworker.go) || exit 1
 (cd .. && go build $RACE mrsequential.go) || exit 1
@@ -93,6 +94,34 @@ then
   echo '---' indexer test: PASS
 else
   echo '---' indexer output is not the same as mr-correct-indexer.txt
+  echo '---' indexer test: FAIL
+  failed_any=1
+fi
+
+wait
+
+#########################################################
+
+# generate the correct output
+../mrsequential ../impl/grep.so ../input/pg*txt || exit 1
+sort mr-out-0 > mr-correct-grep.txt
+rm -f mr-out*
+
+echo '***' Starting grep test.
+
+timeout -k 2s 180s ../mrcoordinator ../input/pg*txt &
+sleep 1
+
+# start multiple workers
+timeout -k 2s 180s ../mrworker ../impl/grep.so &
+timeout -k 2s 180s ../mrworker ../impl/grep.so
+
+sort mr-out* | grep . > mr-indexer-all
+if cmp mr-indexer-all mr-correct-indexer.txt
+then
+  echo '---' indexer test: PASS
+else
+  echo '---' indexer output is not the same as mr-correct-grep.txt
   echo '---' indexer test: FAIL
   failed_any=1
 fi
