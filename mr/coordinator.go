@@ -23,45 +23,28 @@ const (
 const (
 	UNASSIGNED TaskStatus = iota
 	ASSIGNED
-	FINISHED
 )
 
 type Task struct {
-	Type   TaskType
-	Status TaskStatus
-	Index  int
-	File   string
+	status TaskStatus
+	bucket int
+	input  []string
 }
 
 type Coordinator struct {
-	mu          sync.Mutex
+	mu    sync.Mutex
+	tasks []*Task
+
 	mapTasks    []*Task
 	reduceTasks []*Task
 	nReduce     int
-}
-
-func getIdleTask(tasks []*Task) *Task {
-	for i := 0; i < len(tasks); i++ {
-		if tasks[i].Status == UNASSIGNED {
-			return tasks[i]
-		}
-	}
-	return nil
-}
-
-func (t *Task) getTaskName() string {
-	name := "Map"
-	if t.Type == ReduceTask {
-		name = "Reduce"
-	}
-	return name
 }
 
 //
 // Monitors task for completion, if after 10 seconds the task still hasn't been completed
 // then mark the task idle or incomplete to be picked up by another worker
 //
-func MonitorWork(c *Coordinator, task *Task, workerId int) {
+func monitorWorker(c *Coordinator, bucket int, bType TaskType, workerId int) {
 	// Wait for 10 seconds and then checking if the certain Task has been completed
 	// If not then assume failure and reset the status from RUNNING to IDLE
 	time.Sleep(time.Duration(10) * time.Second)
@@ -69,79 +52,151 @@ func MonitorWork(c *Coordinator, task *Task, workerId int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if task.Status == ASSIGNED {
-		task.Status = UNASSIGNED
-		log.Printf("%v task %v failed on worker %v", task.getTaskName(), task.Index, workerId)
+	var task *Task
+	if bType == MapTask {
+		for _, t := range c.mapTasks {
+			if t.bucket == bucket {
+				task = t
+				break
+			}
+		}
 	} else {
-		log.Printf("%v task %v succeed on worker %v", task.getTaskName(), task.Index, workerId)
-	}
-}
-
-func allTasksCompleted(tasks []*Task, tt TaskType) bool {
-	for _, t := range tasks {
-		if t.Status != FINISHED {
-			return false
+		for _, t := range c.reduceTasks {
+			if t.bucket == bucket {
+				task = t
+				break
+			}
 		}
 	}
-	return true
+
+	// If task still exists assume it has failed therefore reset to unassigned
+	if task != nil {
+		task.status = UNASSIGNED
+		log.Printf("%v task %v failed on worker %v\n", bType, bucket, workerId)
+	} else {
+		log.Printf("%v task %v succeed on worker %v\n", bType, bucket, workerId)
+	}
 }
 
-func (c *Coordinator) RequestWork(args *RequestWorkArgs, reply *RequestWorkReply) error {
+func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply) error {
 
 	// lock the resources on the coordinator
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// pick an idle map task from coordinator, given the requestor is asking for map
-	var task *Task
-	if task = getIdleTask(c.mapTasks); task == nil {
-		// check if all map tasks have been completed
-		if allTasksCompleted(c.mapTasks, MapTask) {
-			task = getIdleTask(c.reduceTasks)
+	// pick an idle worker(reduce if no map task left)
+	var workerTask *Task
+	var workerTaskType TaskType
+	for _, t := range c.mapTasks {
+		if t.status == UNASSIGNED {
+			workerTask = t
+			workerTaskType = MapTask
+			break
 		}
 	}
 
-	if task != nil {
-		task.Status = ASSIGNED
-
-		reply.Type = task.Type
-		reply.ReduceN = c.nReduce
-		reply.Index = task.Index
-
-		if task.Type == MapTask {
-			reply.File = []string{task.File}
-		} else {
-			files, _ := os.ReadDir(".")
-			for _, file := range files {
-				name := file.Name()
-				if strings.HasSuffix(name, fmt.Sprint(task.Index)) {
-					reply.File = append(reply.File, name)
-				}
+	// now pick a reduce task given no unassigned map task was found
+	canReduce := workerTask == nil && len(c.mapTasks) == 0
+	if canReduce {
+		// search for an unassigned reduce task
+		for _, t := range c.reduceTasks {
+			if t.status == UNASSIGNED {
+				workerTask = t
+				workerTaskType = ReduceTask
+				break
 			}
 		}
-
-		log.Printf("%v task %v assigned to worker %v\n", task.getTaskName(), task.Index, args.WorkerId)
-
-		go MonitorWork(c, task, args.WorkerId)
-	} else {
-		log.Println("No task found in an IDLE state")
 	}
+
+	// if we still don't find task then either:
+	// 	a) some or all maps have been completed or currently being worked on, therefore reduce can't start
+	// 	b) some or all reduces have started or completed but none to be assigned, yet
+	if workerTask != nil {
+		workerTask.status = ASSIGNED
+
+		input := workerTask.input
+		if workerTaskType == ReduceTask {
+			rinput := []string{}
+			dir, _ := os.ReadDir(".")
+			for _, f := range dir {
+				if strings.HasSuffix(f.Name(), fmt.Sprint(workerTask.bucket)) {
+					rinput = append(rinput, f.Name())
+				}
+			}
+			fmt.Printf("assign reduce bucket %v task for files %v\n", workerTask.bucket, rinput)
+			input = rinput
+		}
+
+		reply.Type = workerTaskType
+		reply.Input = input
+		reply.Index = workerTask.bucket
+		reply.ReduceN = c.nReduce
+
+		go monitorWorker(c, workerTask.bucket, workerTaskType, args.WorkerId)
+
+		return nil
+	}
+
+	log.Println("no task unassigned found in the queue")
 
 	return nil
 }
 
-func (c *Coordinator) CompleteWork(args *CompleteWorkArgs, reply *CompleteWorkReply) error {
+func (c *Coordinator) SetTaskCompleted(args *ResponseTaskArgs, reply *ResponseTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var task *Task
+	// if the completed task was a map task, then we need to add reduce task buckets
 	if args.Type == MapTask {
-		task = c.mapTasks[args.Index]
-	} else {
-		task = c.reduceTasks[args.Index]
-	}
+		// select the map task index that it corresponds to
+		mIndex := -1
 
-	task.Status = FINISHED
+		for i, t := range c.mapTasks {
+			if t.bucket == args.Index {
+				mIndex = i
+				break
+			}
+		}
+
+		// first check if this map task has already been proceed(i.e. removed from slice) or,
+		// has been marked as UNASSIGNED which possibly due to timeout then bail out early
+		if mIndex == -1 || c.mapTasks[mIndex].status == UNASSIGNED {
+			return nil
+		}
+
+		// remove the map task given that it has been completed
+		c.mapTasks = append(c.mapTasks[:mIndex], c.mapTasks[mIndex+1:]...) // TODO: this is expensive, reshifting
+
+		// for each bucket arrange the reduce task and append to reduce tasks list with input files
+		// for reduce operations
+		for _, bucket := range args.Buckets {
+			hasBucket := false
+			// ensure we have added this bucket in the reduce
+			for _, t := range c.reduceTasks {
+				if !hasBucket && t.bucket == bucket {
+					hasBucket = true
+				}
+			}
+
+			// if bucket doesn't exist then select all the files for this reduce bucket
+			if !hasBucket {
+				c.reduceTasks = append(c.reduceTasks, &Task{bucket: bucket})
+			}
+		}
+
+		log.Printf("searching for map tasks with index=%v map_buckets=%v reduce_buckets=%v\n", args.Index, len(c.mapTasks), len(c.reduceTasks))
+	} else {
+		// for reduce task completed we just remove the reduce task from the list
+		rIndex := -1
+		for i, t := range c.reduceTasks {
+			if t.bucket == args.Index {
+				rIndex = i
+				break
+			}
+		}
+
+		c.reduceTasks = append(c.reduceTasks[:rIndex], c.reduceTasks[rIndex+1:]...)
+	}
 
 	return nil
 }
@@ -162,16 +217,6 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-func completedTasks(tasks []*Task) int {
-	count := 0
-	for _, t := range tasks {
-		if t.Status == FINISHED {
-			count += 1
-		}
-	}
-	return count
-}
-
 //
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
@@ -180,14 +225,12 @@ func (c *Coordinator) Done() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	cmpMapCnt, cmpRedCnt := completedTasks(c.mapTasks), completedTasks(c.reduceTasks)
-	totMapCnt, totRedCnt := len(c.mapTasks), len(c.reduceTasks)
+	nmap, nreduce := len(c.mapTasks), len(c.reduceTasks)
+	done := nmap+nreduce == 0
 
-	completed := cmpMapCnt == totMapCnt && cmpRedCnt == totRedCnt
+	log.Printf("%v/%v map/reduce tasks left", nmap, nreduce)
 
-	log.Printf("%v/%v map tasks and %v/%v reduce tasks completed", cmpMapCnt, totMapCnt, cmpRedCnt, totRedCnt)
-
-	return completed
+	return done
 }
 
 //
@@ -197,7 +240,9 @@ func (c *Coordinator) Done() bool {
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
-		nReduce:     nReduce,
+		nReduce: nReduce,
+		tasks:   make([]*Task, 0, len(files)+nReduce),
+
 		mapTasks:    make([]*Task, 0, len(files)),
 		reduceTasks: make([]*Task, 0, nReduce),
 	}
@@ -205,14 +250,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	for i := 0; i < len(files); i++ {
 		log.Printf("register map task file=%v index=%v\n", files[i], i)
 
-		mapTask := &Task{MapTask, UNASSIGNED, i, files[i]}
-		c.mapTasks = append(c.mapTasks, mapTask)
-	}
-	for i := 0; i < c.nReduce; i++ {
-		log.Printf("register reduce task index=%v\n", i)
-
-		reduceTask := &Task{ReduceTask, UNASSIGNED, i, ""}
-		c.reduceTasks = append(c.reduceTasks, reduceTask)
+		c.mapTasks = append(c.mapTasks, &Task{UNASSIGNED, i, []string{files[i]}})
 	}
 
 	c.server()

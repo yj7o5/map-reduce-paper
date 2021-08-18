@@ -63,25 +63,27 @@ var WorkerId = os.Getpid()
 //
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 	for {
-		args := RequestWorkArgs{WorkerId}
-		reply := RequestWorkReply{}
+		reqArgs := RequestTaskArgs{WorkerId}
+		reqReply := RequestTaskReply{}
 
-		if succeeded := call("Coordinator.RequestWork", &args, &reply); !succeeded {
+		if succeeded := call("Coordinator.RequestTask", &reqArgs, &reqReply); !succeeded {
 			break
 		}
 
-		if len(reply.File) == 0 {
-			time.Sleep(500 * time.Millisecond)
+		if len(reqReply.Input) == 0 {
+			time.Sleep(250 * time.Millisecond)
 			continue
 		}
 
-		if reply.Type == MapTask {
-			doMap(reply.Index, reply.ReduceN, reply.File[0], mapf)
+		resArgs := ResponseTaskArgs{Type: reqReply.Type, Index: reqReply.Index}
+		resReply := ResponseTaskReply{}
+		if reqReply.Type == MapTask {
+			resArgs.Buckets = doMap(reqReply.Index, reqReply.ReduceN, reqReply.Input[0], mapf)
 		} else {
-			doReduce(reply.Index, reply.File, reducef)
+			doReduce(reqReply.Index, reqReply.Input, reducef)
 		}
 
-		call("Coordinator.CompleteWork", &CompleteWorkArgs{reply.Type, reply.Index}, &CompleteWorkReply{})
+		call("Coordinator.SetTaskCompleted", &resArgs, &resReply)
 	}
 
 	log.Printf("Worker shutting down WorkerId=%v\n", WorkerId)
@@ -90,7 +92,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 //
 // Performs the map function on a given set of key-value pairs
 //
-func doMap(index int, reduceN int, sourceFile string, mapf func(string, string) []KeyValue) {
+func doMap(index int, reduceN int, sourceFile string, mapf func(string, string) []KeyValue) []int {
 	file, _ := read(sourceFile)
 
 	// apply given map function in the worker definition
@@ -101,10 +103,16 @@ func doMap(index int, reduceN int, sourceFile string, mapf func(string, string) 
 
 	tmpSuffix := "-map-tmp"
 
+	indexes := []int{}
+
 	// go through each of the map result key-value pair
 	for _, kv := range kvps {
 		x := index
 		y := ihash(kv.Key) % reduceN
+
+		if !containsInt(y, indexes) {
+			indexes = append(indexes, y)
+		}
 
 		// create intermediate file with following convention: mr-{mapTaskNumber}-{reduceTaskNumber}
 		filename := fmt.Sprintf("mr-%d-%d%v", x, y, tmpSuffix)
@@ -125,12 +133,16 @@ func doMap(index int, reduceN int, sourceFile string, mapf func(string, string) 
 		encoder.Encode(&kv)
 	}
 
+	// rename tmp files to actual reduce files
 	files, _ := os.ReadDir(".")
 	for _, file := range files {
 		if strings.HasSuffix(file.Name(), tmpSuffix) {
-			os.Rename(file.Name(), strings.Replace(file.Name(), tmpSuffix, "", 1))
+			reduceFileName := strings.Replace(file.Name(), tmpSuffix, "", 1)
+			os.Rename(file.Name(), reduceFileName)
 		}
 	}
+
+	return indexes
 }
 
 //
@@ -196,9 +208,9 @@ func doReduce(index int, files []string, reducef func(string, []string) string) 
 	}
 
 	// notify co-ordinator of the task done
-	args := CompleteWorkArgs{ReduceTask, index}
-	reply := CompleteWorkReply{}
-	if ok := call("Coordinator.CompleteWork", &args, &reply); !ok {
+	args := ResponseTaskArgs{Index: index}
+	reply := ResponseTaskReply{}
+	if ok := call("Coordinator.SetTaskCompleted", &args, &reply); !ok {
 		log.Fatalf("Failed reporting reduce task completion to coordinator")
 	}
 

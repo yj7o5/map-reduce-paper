@@ -10,7 +10,7 @@ import (
 //
 // a grep(for filtering text) application "plugin" for MapReduce.
 //
-var expr, _ = regexp.Compile("(Title)|(Author)")
+var expr, _ = regexp.Compile("(Title:)|(Author:)")
 
 func Map(filename string, contents string) []mr.KeyValue {
 

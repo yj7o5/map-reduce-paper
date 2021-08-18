@@ -16,23 +16,24 @@ import (
 // and reply for an RPC.
 //
 
-type RequestWorkArgs struct {
+type RequestTaskArgs struct {
 	WorkerId int
 }
 
-type RequestWorkReply struct {
-	File    []string
+type RequestTaskReply struct {
+	Input   []string
 	ReduceN int
 	Index   int
 	Type    TaskType
 }
 
-type CompleteWorkArgs struct {
-	Type  TaskType
-	Index int
+type ResponseTaskArgs struct {
+	Index   int
+	Buckets []int
+	Type    TaskType
 }
-type CompleteWorkReply struct {
-}
+
+type ResponseTaskReply struct{}
 
 // Add your RPC definitions here and here
 
@@ -44,4 +45,13 @@ func coordinatorSock() string {
 	s := "/var/tmp/824-mr-"
 	s += strconv.Itoa(os.Getuid())
 	return s
+}
+
+func containsInt(value int, arr []int) bool {
+	for _, i := range arr {
+		if value == i {
+			return true
+		}
+	}
+	return false
 }

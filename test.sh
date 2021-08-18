@@ -101,6 +101,8 @@ fi
 wait
 
 #########################################################
+# now grep
+rm -f mr-* 
 
 # generate the correct output
 ../mrsequential ../impl/grep.so ../input/pg*txt || exit 1
@@ -116,13 +118,13 @@ sleep 1
 timeout -k 2s 180s ../mrworker ../impl/grep.so &
 timeout -k 2s 180s ../mrworker ../impl/grep.so
 
-sort mr-out* | grep . > mr-indexer-all
-if cmp mr-indexer-all mr-correct-indexer.txt
+sort mr-out* | grep . > mr-grep-all
+if cmp mr-grep-all mr-correct-grep.txt
 then
-  echo '---' indexer test: PASS
+  echo '---' grep test: PASS
 else
-  echo '---' indexer output is not the same as mr-correct-grep.txt
-  echo '---' indexer test: FAIL
+  echo '---' grep output is not the same as mr-correct-grep.txt
+  echo '---' grep test: FAIL
   failed_any=1
 fi
 
