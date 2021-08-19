@@ -13,9 +13,10 @@ jobs:
       run:  |
         sudo apt-get update
         sudo apt-get -y --no-install-recommends install golang
+    - name: Set permissions
+      run : |
+        sudo chmod 777 ./test.sh
     - name: Unit Tests
       run: |
         (./test.sh > output.txt &)
         ./test.py
-      
-      
