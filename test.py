@@ -2,7 +2,7 @@
 
 import unittest
 
-def TestMapReduce(unittest.TestCase):
+class TestMapReduce(unittest.TestCase):
 
     def test_output(self):
         lines = open("output.txt", "r").readlines()
