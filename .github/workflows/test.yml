@@ -18,5 +18,4 @@ jobs:
         sudo chmod 777 ./test.py
     - name: Unit Tests
       run: |
-        rm output.txt 2> /dev/null
         ./test.sh >> output.txt && ./test.py
