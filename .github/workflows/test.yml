@@ -5,24 +5,18 @@ on: [push]
 jobs:
   build:
     name: Tests
-    strategy:
-      matrix: 
-        go-version: [1.16.x]
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout Code
       uses: actions/checkout@v2
-    - name: Install Go
-      run:  |
-        sudo apt-get update
-        sudo apt-get -y --no-install-recommends install golang
+    - name: Setup Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: '1.16.7'
     - name: Set permissions
       run : |
         sudo chmod 777 ./test.py
     - name: Unit Tests
-      with:
-        go-version: ${{ matrix.go }}
       run: |
-        ./test.sh > output.txt &&
-        ./test.py
+        rm output.txt 2> /dev/null
+        ./test.sh >> output.txt && ./test.py
