@@ -32,9 +32,7 @@ type Task struct {
 }
 
 type Coordinator struct {
-	mu    sync.Mutex
-	tasks []*Task
-
+	mu          sync.Mutex
 	mapTasks    []*Task
 	reduceTasks []*Task
 	nReduce     int
@@ -240,9 +238,7 @@ func (c *Coordinator) Done() bool {
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
-		nReduce: nReduce,
-		tasks:   make([]*Task, 0, len(files)+nReduce),
-
+		nReduce:     nReduce,
 		mapTasks:    make([]*Task, 0, len(files)),
 		reduceTasks: make([]*Task, 0, nReduce),
 	}

@@ -3,18 +3,11 @@ package mr
 //
 // RPC definitions.
 //
-// remember to capitalize all names.
-//
 
 import (
 	"os"
 	"strconv"
 )
-
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
 
 type RequestTaskArgs struct {
 	WorkerId int
